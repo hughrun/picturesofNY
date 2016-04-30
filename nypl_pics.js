@@ -1,0 +1,195 @@
+// Require stuff
+var fs = require('fs');
+var Random = require('random-js');
+var request = require('request');
+var Twit = require('twit');
+require('dotenv').config();
+
+// Set up Random and Twit
+r = new Random(Random.engines.browserCrypto);
+ 
+var T = new Twit({
+  consumer_key:         process.env.TWITTER_KEY,
+  consumer_secret:      process.env.TWITTER_SECRET,
+  access_token:         process.env.TWITTER_ACCESS_TOKEN,
+  access_token_secret:  process.env.TWITTER_TOKEN_SECRET,
+  timeout_ms:           60*1000,  
+})
+
+// Set some variables
+var type = "still image";
+
+var alternatives = ["bird", "pants", "dress", "beer", "Australia", "hat", "France", "fight", "dance", "gentleman", "lady", "girl", "boy", "apple", "circus", "musician", "fireman", "Russia", "Rome", "urchin", "north", "south", "western", "guitar", "slums", "palace", "rich", "candy", "farm", "trash", "fish", "tokyo", "fancy"];
+
+var lastTweet = ''
+
+// Get the last tweet id to which we responded
+fs.readFile('lastId.txt', (err, data) => {
+  if (err) throw err;
+  	lastTweet = data.toString();
+});
+
+// set a 61 second timer to loop
+var checkMentions = setInterval(initiate, 61000);
+
+function initiate() {
+	getMentions(lastTweet);
+};
+
+function getMentions(id) {	
+	T.get('statuses/mentions_timeline', {since_id: id, include_entities: false}, function(err, data, response) {
+		if (data.length > 0) {
+			for (i in data) {
+				var currentId = data[i].id;					
+				var tweet = data[i].text;
+				var name = tweet.slice(0,13).toLowerCase();
+				// only resond to @s, not mentions
+				if (name === '@picturesofny') {
+					var query = tweet.slice(14);
+					var user = data[i].user.screen_name;
+					// only respond to new stuff
+					if (parseInt(currentId) > parseInt(lastTweet)) {
+						getUrl(query, user);
+						setLast(currentId);
+					} else {
+						console.log("no new tweets");
+					}
+				}					
+			}
+		} else {
+			console.log("no tweets");
+		}
+	});
+};
+
+function setLast(id){
+	// update lastTweet
+	lastTweet = id;
+	// write it to file so we're up to date if the script falls over
+	fs.writeFile('lastId.txt', id);
+};
+
+function getUrl(searchTerm, user, initSearch){
+console.log("got searchterm " + searchTerm + " and user " + user);
+	var url = 'http://api.repo.nypl.org/api/v1/items/search?q=' + searchTerm + '&publicDomainOnly=true&per_page=50';
+	request.get(url,{
+		'headers': {
+			 'Authorization':'Token token=' + process.env.NYPL_API_TOKEN	
+			}
+	}, function (error, response, body){
+		 if (!error && response.statusCode == 200) {
+			var parsed = JSON.parse(body);		
+			var hits = parsed.nyplAPI.response.numResults;
+			var pages = parsed.nyplAPI.request.totalPages;
+			if (pages > 1) {
+				var pn = r.integer(1,pages)
+				bigSet(searchTerm, pn, user, initSearch)
+			} else {
+				getFile(parsed, hits, searchTerm, user, initSearch);
+			}
+		 };
+	});
+};
+
+function bigSet(searchTerm, pn, user, initSearch) {	
+	var url = 'http://api.repo.nypl.org/api/v1/items/search?q=' + searchTerm + '&publicDomainOnly=true&page=' + pn + '&per_page=50';
+	request.get(url,{
+		'headers': {
+			 'Authorization':'Token token=' + process.env.NYPL_API_TOKEN	
+			}
+	}, function (error, response, body){	
+		 if (!error && response.statusCode == 200) {
+			var parsed = JSON.parse(body);				
+			var hits = parsed.nyplAPI.response.numResults;		
+			var pages = parsed.nyplAPI.request.totalPages;
+			getFile(parsed, hits, searchTerm, user, initSearch);
+		};
+	});
+};
+
+function getFile (parsed, hits, searchTerm, user, initSearch) {
+			// if we get a result, pic a random image from the returned data			
+			if (hits > 0) {
+				for (z in parsed.nyplAPI.response.result) {
+					var itm = parsed.nyplAPI.response.result[z];				
+						if (itm.typeOfResource === "still image") {										
+						var imageID = itm.imageID;		
+						var uuid = itm.uuid;
+						// build the image url for 100px square images
+						// the API tells us it's always constructed like this
+						var picUrl = "http://images.nypl.org/index.php?id=" + imageID + "&t=r&download=1&suffix=" + uuid + ".001"
+						choosePic.add(picUrl)					
+					}	
+				} if (choosePic.size() != 0) {
+					choosePic.choose(searchTerm, user, initSearch);
+				} else {
+					// if there are no results, try again, and include the initial search term as an argument
+					// if there's already one listed, keep using it so we keep the actual query
+					var alternative = r.pick(alternatives);
+						if (initSearch) {
+							getUrl(alternative, user, initSearch);	
+						} else {
+							getUrl(alternative, user, searchTerm);
+						}
+				}
+			} else {
+					var alternative = r.pick(alternatives);
+					if (initSearch) {
+							getUrl(alternative, user, initSearch);	
+						} else {
+							getUrl(alternative, user, searchTerm);
+						}
+					};
+			};
+
+var choosePic = (function() {
+	var array = [];
+	function addItem(url){
+	array.push(url)
+}
+	return {
+		add: function(url) {
+			addItem(url);
+		},
+		size: function(){
+			return array.length;
+		},
+		choose: function(searchTerm, user, initSearch){
+			var pic = r.pick(array);
+			array = [];
+			return savePic(pic, searchTerm, user, initSearch);
+		}
+	}						
+})();
+
+
+function savePic (url, searchTerm, user, initSearch) {
+	var file = r.string(24) + '.jpeg'
+	var stream = request(url).pipe(fs.createWriteStream('pics/' + file));
+
+	// when pipe ends
+	stream.on('finish', function() {sendTweet(file, searchTerm, user, initSearch)});
+};
+
+function sendTweet(file, searchTerm, user, initSearch) {
+	var b64content = fs.readFileSync('pics/' + file, { encoding: 'base64' });
+	if (!initSearch) {
+		var msg = "@" + user + " I found you the perfect picture of " + searchTerm;
+	} else {
+		var msg = "@" + user + " Sorry, I couldn't find a picture of " + initSearch + " so I got you a picture of " + searchTerm + ".";
+	}
+
+		// first we must post the media to Twitter 
+	T.post('media/upload', { media_data: b64content }, function (err, data, response) {
+	 
+	  // now we can reference the media and post a tweet (media will attach to the tweet) 
+	  var mediaIdStr = data.media_id_string
+	  var params = { status: msg, media_ids: [mediaIdStr] }
+	 
+	  T.post('statuses/update', params, function (err, data, response) {
+	    console.log(data.text)
+	    // probably should consider deleting the image file here, otherwise the disk will fill up
+	    // or alternatively we could give every picture the same name, if we can do that in a way that works
+	  })
+	});
+};
