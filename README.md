@@ -1,4 +1,4 @@
-# picturesofNY (v 0.1)
+# picturesofNY (v 0.2)
 
 This is a nodejs Twitter bot that uses the [New York Public Library Digital Collections API](http://api.repo.nypl.org/#).
 
@@ -14,6 +14,12 @@ To see it in action, check out [@picturesofNY](https://twitter.com/picturesofNY)
 * random-js
 * request
 * twit
+
+## Change Log
+
+### v0.2
+
+Now uses the Twitter streaming API, with REST API to catch anything sent whilst the bot is disconnected for any reason.
 
 ## License
 

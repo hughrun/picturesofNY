@@ -1,3 +1,10 @@
+// Create a simple server to keep the bot running
+var http = require('http');
+http.createServer(function (req, res) {
+  res.writeHead(200, {'Content-Type': 'text/plain'});
+  res.end('Pictures of New York\n');
+}).listen(8090);
+
 // Require stuff
 var fs = require('fs');
 var Random = require('random-js');
@@ -19,52 +26,75 @@ var T = new Twit({
 // Set some variables
 var type = "still image";
 
-var alternatives = ["bird", "pants", "dress", "beer", "Australia", "hat", "France", "fight", "dance", "gentleman", "lady", "girl", "boy", "apple", "circus", "musician", "fireman", "Russia", "Rome", "urchin", "north", "south", "western", "guitar", "slums", "palace", "rich", "candy", "farm", "trash", "fish", "tokyo", "fancy"];
+var alternatives = ["bird", "pants", "dress", "beer", "Australia", "hat", "France", "fight", "dance", "gentleman", "lady", "boy", "apple", "circus", "musician", "fireman", "Russia", "Rome", "urchin", "north", "south", "western", "guitar", "slums", "palace", "rich", "candy", "farm", "trash", "fish", "tokyo", "fancy"];
 
-var lastTweet = ''
+var stream = T.stream('user', {replies: 'all'});
 
-// Get the last tweet id to which we responded
-fs.readFile('lastId.txt', (err, data) => {
-  if (err) throw err;
-  	lastTweet = data.toString();
+stream.on('tweet', function(tweet){
+	var text = tweet.text;
+	var name = text.slice(0,13).toLowerCase();
+
+	// only respond to @s, not mentions
+	if (name === '@picturesofny') {
+		var query = text.slice(14);
+		var user = tweet.user.screen_name;
+		// use tweet id_str (not id: they're sometimes different)
+		var currentId = tweet.id_str;
+		// don't respond to self (to avoid an infinite loop)
+		// I can't think of any reason this would happen, but just in case...
+		if (user !== 'picturesofNY') {
+			getUrl(query, user);
+			// update last tweet ID
+			setLast(currentId);			
+		};
+	}
 });
 
-// set a 61 second timer to loop
-var checkMentions = setInterval(initiate, 61000);
+// ****** fallover
+// whenever we (re)connect to Twitter, check for any mentions since we last responded
+stream.on('connected', function(response){
+	// Get the last tweet id to which we responded
+	fs.readFile('lastId.txt', (err, data) => {
+		if (err) throw err;
+		var lastTweet = data.toString();
+		getMentions(lastTweet);
+	});
+});
 
-function initiate() {
-	getMentions(lastTweet);
-};
-
-function getMentions(id) {	
+function getMentions(id) {
+	// create empty array
+	var replies = [];
+	// get mentions since the lastId
 	T.get('statuses/mentions_timeline', {since_id: id, include_entities: false}, function(err, data, response) {
 		if (data.length > 0) {
 			for (i in data) {
-				var currentId = data[i].id;					
+				var currentId = data[i].id_str;					
 				var tweet = data[i].text;
 				var name = tweet.slice(0,13).toLowerCase();
-				// only resond to @s, not mentions
+				// only respond to @s, not mentions
 				if (name === '@picturesofny') {
 					var query = tweet.slice(14);
 					var user = data[i].user.screen_name;
-					// only respond to new stuff
-					if (parseInt(currentId) > parseInt(lastTweet)) {
-						getUrl(query, user);
-						setLast(currentId);
-					} else {
-						console.log("no new tweets");
-					}
-				}					
-			}
+					// trigger a reply
+					getUrl(query, user);
+				};
+			};
+			// push every ID to an array
+			replies.push(currentId);				
+			// set new 'lastId' using the biggest (i.e. latest) ID
+			// sort descending using a compare function 
+			replies.sort(function(a,b){return b-a});
+			// get biggest number
+			var newId = replies[0];							
+			setLast(newId);
 		} else {
-			console.log("no tweets");
+			console.log("no new tweets");
 		}
 	});
 };
+// ****** end fallover
 
 function setLast(id){
-	// update lastTweet
-	lastTweet = id;
 	// write it to file so we're up to date if the script falls over
 	fs.writeFile('lastId.txt', id);
 };
@@ -77,6 +107,7 @@ console.log("got searchterm " + searchTerm + " and user " + user);
 			 'Authorization':'Token token=' + process.env.NYPL_API_TOKEN	
 			}
 	}, function (error, response, body){
+		if (error) {console.log(error)};
 		 if (!error && response.statusCode == 200) {
 			var parsed = JSON.parse(body);		
 			var hits = parsed.nyplAPI.response.numResults;
@@ -97,7 +128,8 @@ function bigSet(searchTerm, pn, user, initSearch) {
 		'headers': {
 			 'Authorization':'Token token=' + process.env.NYPL_API_TOKEN	
 			}
-	}, function (error, response, body){	
+	}, function (error, response, body){
+		if (error){console.log(error)};	
 		 if (!error && response.statusCode == 200) {
 			var parsed = JSON.parse(body);				
 			var hits = parsed.nyplAPI.response.numResults;		
