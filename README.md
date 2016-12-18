@@ -17,6 +17,10 @@ To see it in action, check out [@picturesofNY](https://twitter.com/picturesofNY)
 
 ## Change Log
 
+### v0.2.1
+
+Fixed bug where bot fell over if NYPL API returns an empty result.
+
 ### v0.2
 
 Now uses the Twitter streaming API, with REST API to catch anything sent whilst the bot is disconnected for any reason.

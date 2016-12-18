@@ -21,14 +21,17 @@ var T = new Twit({
   access_token:         process.env.TWITTER_ACCESS_TOKEN,
   access_token_secret:  process.env.TWITTER_TOKEN_SECRET,
   timeout_ms:           60*1000,  
-})
+});
 
 // Set some variables
-var type = "still image";
 
 var alternatives = ["bird", "pants", "dress", "beer", "Australia", "hat", "France", "fight", "dance", "gentleman", "lady", "boy", "apple", "circus", "musician", "fireman", "Russia", "Rome", "urchin", "north", "south", "western", "guitar", "slums", "palace", "rich", "candy", "farm", "trash", "fish", "tokyo", "fancy"];
-
 var stream = T.stream('user', {replies: 'all'});
+
+stream.on('error', function(error) {
+	console.log("### Twitter replies stream error ###");
+	console.log(error);
+})
 
 stream.on('tweet', function(tweet){
 	var text = tweet.text;
@@ -40,9 +43,10 @@ stream.on('tweet', function(tweet){
 		var user = tweet.user.screen_name;
 		// use tweet id_str (not id: they're sometimes different)
 		var currentId = tweet.id_str;
-		// don't respond to self (to avoid an infinite loop)
+		// make sure bot doesn't respond to self (to avoid an infinite loop)
 		// I can't think of any reason this would happen, but just in case...
 		if (user !== 'picturesofNY') {
+			// respond
 			getUrl(query, user);
 			// update last tweet ID
 			setLast(currentId);			
@@ -55,7 +59,10 @@ stream.on('tweet', function(tweet){
 stream.on('connected', function(response){
 	// Get the last tweet id to which we responded
 	fs.readFile('lastId.txt', (err, data) => {
-		if (err) throw err;
+		if (err) {
+			console.log('### Twitter reconnection error ###');
+			console.log(err);
+		}
 		var lastTweet = data.toString();
 		getMentions(lastTweet);
 	});
@@ -107,7 +114,10 @@ console.log("got searchterm " + searchTerm + " and user " + user);
 			 'Authorization':'Token token=' + process.env.NYPL_API_TOKEN	
 			}
 	}, function (error, response, body){
-		if (error) {console.log(error)};
+		if (error) {
+			console.log('### error getting NYPL url ###');
+			console.log(error);
+		};
 		 if (!error && response.statusCode == 200) {
 			var parsed = JSON.parse(body);		
 			var hits = parsed.nyplAPI.response.numResults;
@@ -129,7 +139,10 @@ function bigSet(searchTerm, pn, user, initSearch) {
 			 'Authorization':'Token token=' + process.env.NYPL_API_TOKEN	
 			}
 	}, function (error, response, body){
-		if (error){console.log(error)};	
+		if (error){
+			console.log('### error retrieving large NYPL set')
+			console.log(error)
+		};	
 		 if (!error && response.statusCode == 200) {
 			var parsed = JSON.parse(body);				
 			var hits = parsed.nyplAPI.response.numResults;		
@@ -140,39 +153,39 @@ function bigSet(searchTerm, pn, user, initSearch) {
 };
 
 function getFile (parsed, hits, searchTerm, user, initSearch) {
-			// if we get a result, pic a random image from the returned data			
-			if (hits > 0) {
-				for (z in parsed.nyplAPI.response.result) {
-					var itm = parsed.nyplAPI.response.result[z];				
-						if (itm.typeOfResource === "still image") {										
-						var imageID = itm.imageID;		
-						var uuid = itm.uuid;
-						// build the image url for 100px square images
-						// the API tells us it's always constructed like this
-						var picUrl = "http://images.nypl.org/index.php?id=" + imageID + "&t=r&download=1&suffix=" + uuid + ".001"
-						choosePic.add(picUrl)					
-					}	
-				} if (choosePic.size() != 0) {
-					choosePic.choose(searchTerm, user, initSearch);
+	// if we get a result, pic a random image from the returned data			
+	if (hits > 0) {
+		for (z in parsed.nyplAPI.response.result) {
+			var itm = parsed.nyplAPI.response.result[z];				
+				if (itm && itm.typeOfResource === "still image") {										
+				var imageID = itm.imageID;		
+				var uuid = itm.uuid;
+				// build the image url for 100px square images
+				// the API tells us it's always constructed like this
+				var picUrl = "http://images.nypl.org/index.php?id=" + imageID + "&t=r&download=1&suffix=" + uuid + ".001"
+				choosePic.add(picUrl)					
+			}	
+		} if (choosePic.size() != 0) {
+			choosePic.choose(searchTerm, user, initSearch);
+		} else {
+			// if there are no results, try again, and include the initial search term as an argument
+			// if there's already one listed, keep using it so we keep the actual query
+			var alternative = r.pick(alternatives);
+				if (initSearch) {
+					getUrl(alternative, user, initSearch);	
 				} else {
-					// if there are no results, try again, and include the initial search term as an argument
-					// if there's already one listed, keep using it so we keep the actual query
-					var alternative = r.pick(alternatives);
-						if (initSearch) {
-							getUrl(alternative, user, initSearch);	
-						} else {
-							getUrl(alternative, user, searchTerm);
-						}
+					getUrl(alternative, user, searchTerm);
 				}
+		}
+	} else {
+		var alternative = r.pick(alternatives);
+		if (initSearch) {
+				getUrl(alternative, user, initSearch);	
 			} else {
-					var alternative = r.pick(alternatives);
-					if (initSearch) {
-							getUrl(alternative, user, initSearch);	
-						} else {
-							getUrl(alternative, user, searchTerm);
-						}
-					};
-			};
+				getUrl(alternative, user, searchTerm);
+			}
+		};
+};
 
 var choosePic = (function() {
 	var array = [];
@@ -196,32 +209,48 @@ var choosePic = (function() {
 
 
 function savePic (url, searchTerm, user, initSearch) {
-	var file = r.string(24) + '.jpeg'
-	var stream = request(url).pipe(fs.createWriteStream('pics/' + file));
+	var file = r.string(24) + '.jpeg';
+	var picStream = request(url).pipe(fs.createWriteStream('pics/' + file, {autoClose: true}));
+
+	// log errors
+	picStream.on('error', function(error){
+		console.log('#### error saving pic ####');
+		console.log(error);
+	});
 
 	// when pipe ends
-	stream.on('finish', function() {sendTweet(file, searchTerm, user, initSearch)});
+	picStream.on('finish', function() {sendTweet(file, searchTerm, user, initSearch)});
 };
 
 function sendTweet(file, searchTerm, user, initSearch) {
-	var b64content = fs.readFileSync('pics/' + file, { encoding: 'base64' });
+
+	 var image = fs.readFileSync('pics/' + file, { encoding: 'base64'});
+
 	if (!initSearch) {
 		var msg = "@" + user + " I found you the perfect picture of " + searchTerm;
 	} else {
 		var msg = "@" + user + " Sorry, I couldn't find a picture of " + initSearch + " so I got you a picture of " + searchTerm + ".";
 	}
 
-		// first we must post the media to Twitter 
-	T.post('media/upload', { media_data: b64content }, function (err, data, response) {
+	// first we must post the media to Twitter 
+	T.post('media/upload', { media_data: image }, function (err, data, response) {
+		 if (err){
+		 	console.log('### error uploading pic');
+		 	console.log(err);
+		 };
+		// now we can reference the media and post a tweet (media will attach to the tweet) 
+	 	var mediaIdStr = data.media_id_string;
+		var params = { status: msg, media_ids: [mediaIdStr] }
 	 
-	  // now we can reference the media and post a tweet (media will attach to the tweet) 
-	  var mediaIdStr = data.media_id_string
-	  var params = { status: msg, media_ids: [mediaIdStr] }
-	 
-	  T.post('statuses/update', params, function (err, data, response) {
-	    console.log(data.text)
-	    // probably should consider deleting the image file here, otherwise the disk will fill up
-	    // or alternatively we could give every picture the same name, if we can do that in a way that works
-	  })
+		T.post('statuses/update', params, function (err, data, response) {
+		  	if (err) {
+		  		console.log('### error posting to Twitter ###');
+		  		console.log(error);
+		  	};
+		    console.log(data.text)
+		    // probably should consider deleting the image file here, otherwise the disk will fill up
+		    // or alternatively we could give every picture the same name, if we can do that in a way that works
+	  });
 	});
+	image = null;		
 };
